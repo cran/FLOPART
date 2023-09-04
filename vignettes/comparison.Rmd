@@ -1,0 +1,219 @@
+<!--
+%\VignetteEngine{knitr::knitr}
+%\VignetteIndexEntry{Comparison}
+-->
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+FLOPART is short for "Functional Labeled Optimal Partitioning" and the
+key words there which make it different from previous algorithms are
+
+* Functional: the cost functions are computed for pruning/speed, and
+  to enforce a constrained/interpretable model which alternates
+  between up/peak and down/background states.
+* Labeled: the labels constrain the positions where it is possible (or
+  not) to have change-points.
+  
+In this vignette we present a comparison of FLOPART with other
+algorithms which do not have these two properties.
+
+## No label constraints
+
+As a simple example, consider the following genomic data set:
+
+```{r}
+library(data.table)
+data("Mono27ac.simple", package="FLOPART")
+Mono27ac.simple
+```
+
+The data tables above are visualized in the plot below,
+
+```{r}
+ann.colors <- c(
+  noPeaks="orange",
+  peakStart="#efafaf",
+  peakEnd="#ff4c4c")
+if(require("ggplot2")){
+  ggplot()+
+    theme_bw()+
+    scale_fill_manual("label", values=ann.colors)+
+    geom_rect(aes(
+      xmin=chromStart-0.5, xmax=chromEnd+0.5,
+      ymin=-Inf, ymax=Inf,
+      fill=annotation),
+      alpha=0.5,
+      color="grey",
+      data=Mono27ac.simple[["label"]])+
+    geom_step(aes(
+      chromStart, count),
+      data=Mono27ac.simple[["coverage"]],
+      color="grey50")
+}
+```
+
+The raw aligned read count data are shown in grey (larger values
+indicate more likely Mono27ac histone modification), and the labels
+are shown in colored rectangles (these indicate where the algorithm
+should detect changes, or not).
+
+The code below computes the FLOPART model, for a properly chosen penalty: 
+
+```{r}
+label.pen <- 1400
+fit <- with(Mono27ac.simple, FLOPART::FLOPART(coverage, label, label.pen))
+lapply(fit, head)
+str(fit)
+```
+
+Above we can see that `fit` is a list with several components:
+
+* `coverage_dt` is a data table of aligned read count coverage, same
+  as input but with an additional `weight` column.
+* `label_dt` is a data table of labels, same as input but with
+  additional columns `type`, `firstRow`, `lastRow`, which are used as
+  input to the C++ code.
+* `cost_mat` is a N x 2 matrix of constrained optimal cost values, for each
+  coverage data point (row) and state (column).
+* `intervals_mat` is a N x 2 matrix of counts of intervals used to
+  represent the cost function, for each coverage data point (row) and
+  state (column).
+* `segments_dt` is a data table which represents the
+  segmentation/change-point model.
+  
+Below, for comparison, we compute models without label constraints:
+
+```{r}
+penalty.vec <- c(
+  "7"=1400,
+  "6"=1450,
+  "5"=1460)
+unlabeled.segs.dt.list <- list()
+for(penalty in penalty.vec){
+  ufit <- FLOPART::FLOPART(Mono27ac.simple[["coverage"]], penalty=penalty)
+  pen.segs <- ufit[["segments_dt"]]
+  pen.peaks <- pen.segs[status=="peak"]
+  n.peaks <- nrow(pen.peaks)
+  unlabeled.segs.dt.list[[paste(penalty)]] <- data.table(
+    penalty, n.peaks, pen.segs)
+}
+(unlabeled.segs.dt <- do.call(rbind, unlabeled.segs.dt.list))
+```
+
+The table above represents the models without label constraints, for
+three different input penalties, which result in three different
+numbers of detected peaks. Below we visualize those models:
+
+```{r}
+model.color <- "blue"
+if(require("ggplot2")){
+  ggplot()+
+    ggtitle("Models without label constraints")+
+    geom_step(aes(
+      chromStart, count),
+      data=Mono27ac.simple[["coverage"]],
+      color="grey50")+
+    geom_step(aes(
+      chromStart, mean),
+      data=unlabeled.segs.dt,
+      color=model.color)+
+    theme_bw()+
+    theme(panel.spacing=grid::unit(0, "lines"))+
+    facet_grid(penalty + n.peaks ~ ., labeller=label_both)
+}
+```
+
+The plot above shows the segmentation models without label
+constraints.  Below we compute a data table to represent the
+segmentation, label errors, and predicted peaks of all models:
+
+```{r}
+cons.segs <- fit[["segments_dt"]]
+model.list <- c(unlabeled.segs.dt.list, list(FLOPART=data.table(
+  penalty=label.pen, n.peaks=sum(cons.segs[["status"]]=="peak"), cons.segs)))
+peaks.dt.list <- list()
+err.dt.list <- list()
+segs.dt.list <- list()
+for(model in names(model.list)){
+  model.segs <- model.list[[model]]
+  model.peaks <- model.segs[status=="peak"]
+  model.err <- if(requireNamespace("PeakError")){
+    perr <- PeakError::PeakErrorChrom(model.peaks, Mono27ac.simple[["label"]])
+    data.table(perr)[, .(chromStart, chromEnd, status)]
+  }else{
+    data.table(chromStart=integer(), chromEnd=integer(), status=character())
+  }
+  segs.dt.list[[model]] <- data.table(model, model.segs)
+  err.dt.list[[model]] <- data.table(model, model.err)
+  peaks.dt.list[[model]] <- data.table(model, model.peaks)
+}
+(segs.dt <- do.call(rbind, segs.dt.list))
+(err.dt <- do.call(rbind, err.dt.list))
+(peaks.dt <- do.call(rbind, peaks.dt.list))
+```
+
+Finally we use the code below to visualize the models with and without
+label constraints.
+
+```{r}
+peak.y <- -2
+if(require("ggplot2")){
+  ggplot()+
+    ggtitle("Models with label constraints (FLOPART) and without (penalty values)")+
+    scale_fill_manual("label", values=ann.colors)+
+    geom_rect(aes(
+      xmin=chromStart, xmax=chromEnd,
+      ymin=-Inf, ymax=Inf,
+      fill=annotation),
+      alpha=0.5,
+      color="grey",
+      data=Mono27ac.simple[["label"]])+
+    geom_step(aes(
+      chromStart, count),
+      data=Mono27ac.simple[["coverage"]],
+      color="grey50")+
+    geom_step(aes(
+      chromStart, mean),
+      data=segs.dt,
+      color=model.color)+
+    geom_segment(aes(
+      chromStart, peak.y,
+      xend=chromEnd, yend=peak.y),
+      color=model.color,
+      size=1,
+      data=peaks.dt)+
+    geom_point(aes(
+      chromEnd, peak.y),
+      color=model.color,
+      shape=21,
+      fill="white",
+      data=peaks.dt)+
+    theme_bw()+
+    theme(panel.spacing=grid::unit(0, "lines"))+
+    facet_grid(model ~ ., labeller=label_both)+
+    scale_linetype_manual(
+      "error type",
+      values=c(
+        correct=0,
+        "false negative"=3,
+        "false positive"=1))+
+    geom_rect(aes(
+      xmin=chromStart, xmax=chromEnd,
+      ymin=-Inf, ymax=Inf,
+      linetype=status),
+      fill=NA,
+      color="black",
+      size=1,
+      data=err.dt)
+}
+```
+
+In the plot above, the advantages of FLOPART are clear (no label
+errors), relative to the models without label constraints (always have
+some false positives or negatives with respect to the labels).
+
