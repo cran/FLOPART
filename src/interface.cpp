@@ -51,10 +51,16 @@ Rcpp::List FLOPART_interface
   Rcpp::IntegerVector rev_end_vec(data_count);
   Rcpp::NumericVector rev_mean_vec(data_count);
   Rcpp::IntegerVector rev_state_vec(data_count);
+  const int *label_type_ptr=0, *label_start_ptr=0, *label_end_ptr=0;
+  if(0 < label_count){
+    label_type_ptr = &label_type_vec[0];
+    label_start_ptr = &label_start_vec[0];
+    label_end_ptr = &label_end_vec[0];
+  }
   int status = FLOPART
     (&data_vec[0], &weight_vec[0],
      data_count, penalty,
-     &label_type_vec[0], &label_start_vec[0], &label_end_vec[0], label_count,
+     label_type_ptr, label_start_ptr, label_end_ptr, label_count,
      &cost_mat[0], &rev_end_vec[0], &rev_mean_vec[0], &intervals_mat[0],
      &rev_state_vec[0]
      );

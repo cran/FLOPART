@@ -1,3 +1,9 @@
+Changes in version 2024.6.19
+
+- fix ubsan issue by checking if at least 1 label before getting pointer.
+- change citation in DESCRIPTION to JCGS year/DOI.
+- add CITATION file.
+
 Changes in version 2023.8.31
 
 - reformat NEWS.
